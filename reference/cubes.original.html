@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <title>立方體維度探索器</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background: #f6f6f6;
+            color: #222;
+            text-align: center;
+        }
+
+        #controls {
+            margin: 20px;
+        }
+
+        canvas {
+            background: #fff;
+            margin-top: 20px;
+            border-radius: 8px;
+        }
+
+        label,
+        input {
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>立方體維度探索器</h1>
+    <div id="controls">
+        <label for="dimension">維度 (0~50): </label>
+        <input type="number" id="dimension" min="0" max="50" value="3">
+        <label for="lineWidth" style="margin-left: 20px;">線段寬度 (1~10): </label>
+        <input type="number" id="lineWidth" min="1" max="10" value="3">
+        <br><br>
+        <label for="maxWidth">最大寬度: </label>
+        <input type="range" id="maxWidth" min="300" max="2000" value="800" style="width: 300px;">
+        <span id="maxWidthValue">800</span>px
+        <br><br>
+        <label for="maxHeight">最大高度: </label>
+        <input type="range" id="maxHeight" min="200" max="1500" value="600" style="width: 300px;">
+        <span id="maxHeightValue">600</span>px
+        <br><br>
+        <label for="bwMode" style="margin-left: 20px;">
+            <input type="checkbox" id="bwMode"> 黑白模式
+        </label>
+        <label for="visualSpacing" style="margin-left: 20px;">
+            <input type="checkbox" id="visualSpacing"> 視覺排列
+        </label>
+        <br><br>
+        <!-- 移除繪製按鈕 -->
+        <!-- <button onclick="drawCube()">繪製</button> -->
+    </div>
+    <canvas id="cubeCanvas" style="width:98vw;height:75vh;display:block;"></canvas>
+    <script>
+        // 取得 n-cube 的所有頂點（以二進位陣列表示）
+        function getCubeVertices(n) {
+            const vertices = [];
+            const total = 1 << n;
+            for (let i = 0; i < total; i++) {
+                const arr = [];
+                for (let j = 0; j < n; j++) arr.push((i >> j) & 1);
+                vertices.push(arr);
+            }
+            return vertices;
+        }
+
+        // 取得 n-cube 的所有邊（只差一位的連線）
+        function getCubeEdges(n) {
+            const edges = [];
+            const total = 1 << n;
+            for (let i = 0; i < total; i++) {
+                for (let j = 0; j < n; j++) {
+                    const neighbor = i ^ (1 << j);
+                    if (i < neighbor) edges.push([i, neighbor]);
+                }
+            }
+            return edges;
+        }
+
+        // Hasse diagram: 分層排列所有頂點
+        // visualSpacing: 是否啟用視覺排列
+        function getHasseLayout(vertices, width, height, n, maxWidth, maxHeight, visualSpacing = false) {
+            // 分層：根據 1 的個數
+            const layers = Array.from({ length: n + 1 }, () => []);
+            vertices.forEach((v, idx) => {
+                const ones = v.reduce((a, b) => a + b, 0);
+                layers[ones].push({ idx, v });
+            });
+            
+            // 先計算所有層的寬度，找出最寬的層
+            let maxLayerWidth = 0;
+            const layerWidths = [];
+            for (let l = 0; l <= n; l++) {
+                const count = layers[l].length;
+                const gap = Math.max(60, Math.min((maxWidth - 100) / (count - 1 || 1), 300));
+                const layerWidth = (count - 1) * gap;
+                layerWidths[l] = layerWidth;
+                maxLayerWidth = Math.max(maxLayerWidth, layerWidth);
+            }
+            
+            // 計算每層的座標，根據每層節點數自動調整間距
+            const layout = [];
+            const effectiveHeight = maxHeight; // 直接使用使用者設定的最大高度
+            const layerHeight = effectiveHeight / (n + 2);
+            const startY = (height - effectiveHeight) / 2; // 垂直置中
+            
+            for (let l = 0; l <= n; l++) {
+                // 讓 l=0 在最下方，l=n 在最上方
+                const y = startY + effectiveHeight - layerHeight * (l + 1);
+                // 依二進位數值排序（由小到大）
+                const sorted = layers[l].slice().sort((a, b) => {
+                    // 由左到右，二進位數值遞增
+                    const aVal = parseInt(a.v.join(''), 2);
+                    const bVal = parseInt(b.v.join(''), 2);
+                    return aVal - bVal;
+                });
+                const count = sorted.length;
+                let gap = Math.max(60, Math.min((maxWidth - 100) / (count - 1 || 1), 300));
+                let startX = width / 2 - gap * (count - 1) / 2;
+                
+                // 4D以上：為每一層添加水平偏移，避免垂直對齊
+                let layerOffset = 0;
+                if (n >= 4) {
+                    // 根據該層相對於最寬層的寬度差異來計算偏移
+                    const widthDifference = maxLayerWidth - layerWidths[l];
+                    const maxOffset = Math.min(gap * 0.25, 40); // 最大偏移量
+                    
+                    // 使用寬度差異和層位置來創建偏移模式
+                    // 越窄的層偏移越大，同時考慮層的奇偶性來交替方向
+                    const offsetRatio = widthDifference / (maxLayerWidth || 1);
+                    const direction = (l % 2 === 0) ? 1 : -1; // 交替左右偏移
+                    layerOffset = direction * offsetRatio * maxOffset;
+                }
+                
+                // 視覺排列：高位元不同時多加間距
+                let xArr = [];
+                if (visualSpacing && count > 1) {
+                    let extraGap = Math.max(40, gap * 0.5); // 額外間距
+                    let prevHighBit = sorted[0].v[0];
+                    let x = startX;
+                    xArr.push(x);
+                    for (let i = 1; i < count; i++) {
+                        let currHighBit = sorted[i].v[0];
+                        if (currHighBit !== prevHighBit) {
+                            x += extraGap; // 高位元不同時多加間距
+                        }
+                        x += gap;
+                        xArr.push(x);
+                        prevHighBit = currHighBit;
+                    }
+                }
+                
+                for (let i = 0; i < count; i++) {
+                    let x;
+                    if ((l === 0 || l === n) && count === 1) {
+                        // 最下層和最上層只有一個節點時，強制置中
+                        x = width / 2;
+                    } else {
+                        x = visualSpacing && count > 1 ? xArr[i] + layerOffset : startX + i * gap + layerOffset;
+                    }
+                    layout[sorted[i].idx] = [x, y];
+                }
+            }
+            return layout;
+        }
+
+        function resizeCanvasToFullscreen(canvas) {
+            // 設定 canvas 實際像素大小以符合螞蟻
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        function drawCube() {
+            const dim = parseInt(document.getElementById('dimension').value);
+            const baseLineWidth = parseInt(document.getElementById('lineWidth').value);
+            const maxWidth = parseInt(document.getElementById('maxWidth').value);
+            const maxHeight = parseInt(document.getElementById('maxHeight').value);
+            const bwMode = document.getElementById('bwMode').checked;
+            const visualSpacing = document.getElementById('visualSpacing').checked;
+            const canvas = document.getElementById('cubeCanvas');
+            resizeCanvasToFullscreen(canvas);
+            const width = canvas.width;
+            const height = canvas.height;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, width, height);
+
+            if (dim === 0) {
+                // 0D: 只畫藍色原點
+                ctx.beginPath();
+                ctx.arc(width / 2, height / 2, 10, 0, 2 * Math.PI);
+                ctx.fillStyle = '#3498db';
+                ctx.fill();
+                ctx.font = '20px monospace';
+                ctx.fillStyle = '#111';
+                ctx.fillText('0', width / 2 + 20, height / 2 + 5);
+                return;
+            }
+
+            const vertices = getCubeVertices(dim);
+            const edges = getCubeEdges(dim);
+            const layout = getHasseLayout(vertices, width, height, dim, maxWidth, maxHeight, visualSpacing);
+
+            // 1D: 藍點(下)紅點(上) 綠線連接
+            if (dim === 1) {
+                // 畫邊
+                ctx.strokeStyle = bwMode ? '#222' : '#2ecc40';
+                ctx.lineWidth = baseLineWidth;
+                ctx.setLineDash(bwMode ? [8, 8] : []);
+                ctx.beginPath();
+                ctx.moveTo(...layout[0]);
+                ctx.lineTo(...layout[1]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                // 畫點
+                ctx.beginPath();
+                ctx.arc(...layout[0], 10, 0, 2 * Math.PI);
+                ctx.fillStyle = '#3498db';
+                ctx.fill();
+                ctx.strokeStyle = '#bbb'; ctx.lineWidth = 2; ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(...layout[1], 10, 0, 2 * Math.PI);
+                ctx.fillStyle = '#e74c3c';
+                ctx.fill();
+                ctx.strokeStyle = '#bbb'; ctx.lineWidth = 2; ctx.stroke();
+                // 標註
+                ctx.font = '18px monospace';
+                ctx.fillStyle = '#111';
+                ctx.textAlign = 'center';
+                ctx.fillText('0', layout[0][0], layout[0][1] - 16);
+                ctx.fillText('1', layout[1][0], layout[1][1] - 16);
+                ctx.textAlign = 'left';
+                ctx.fillText('Hasse diagram of 1-cube', 20, 30);
+                return;
+            }
+
+            // 通用邏輯：根據最高位元決定線段顏色
+            // 遍歷所有邊，根據最高位元決定顏色
+            for (const [i, j] of edges) {
+                const vertex1 = vertices[i];
+                const vertex2 = vertices[j];
+                const highBit1 = vertex1[0];
+                const highBit2 = vertex2[0];
+
+                let strokeStyle, strokeWidth, lineDash;
+                if (highBit1 === highBit2) {
+                    if (highBit1 === 0) {
+                        // 都是0：藍色線段
+                        strokeStyle = bwMode ? '#222' : '#3498db';
+                        strokeWidth = bwMode ? baseLineWidth + 1.0 : baseLineWidth;
+                        lineDash = bwMode ? [] : [];
+                    } else {
+                        // 都是1：紅色線段
+                        strokeStyle = bwMode ? '#222' : '#e74c3c';
+                        strokeWidth = bwMode ? baseLineWidth + 1.0 : baseLineWidth;
+                        lineDash = bwMode ? [] : [];
+                    }
+                } else {
+                    // 最高位元不同：綠色線段
+                    strokeStyle = bwMode ? '#222' : '#2ecc40';
+                    strokeWidth = Math.max(1, baseLineWidth - 1);
+                    lineDash = bwMode ? [] : []; // 黑白模式下改為實線
+                }
+
+                ctx.strokeStyle = strokeStyle;
+                ctx.lineWidth = strokeWidth;
+                ctx.setLineDash(lineDash);
+                ctx.beginPath();
+                ctx.moveTo(...layout[i]);
+                ctx.lineTo(...layout[j]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // 畫點
+            for (let i = 0; i < vertices.length; i++) {
+                const ones = vertices[i].reduce((a,b) => a+b, 0);
+                ctx.beginPath();
+                ctx.arc(...layout[i], 10, 0, 2 * Math.PI);
+                if (ones === 0) ctx.fillStyle = '#3498db'; // 底層藍色
+                else if (ones === dim) ctx.fillStyle = '#e74c3c'; // 頂層紅色
+                else ctx.fillStyle = '#fff'; // 其他層白色
+                ctx.fill();
+                ctx.strokeStyle = '#bbb';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            // 標註
+            ctx.font = '16px monospace';
+            ctx.fillStyle = '#111';
+            ctx.textAlign = 'center';
+            for (let i = 0; i < vertices.length; i++) {
+                // 產生字母標籤 (a, b, c, ..., z, aa, ab, ...)
+                // const getLabel = (index) => {
+                //     if (index < 26) {
+                //         return String.fromCharCode(97 + index); // a-z
+                //     } else {
+                //         const first = Math.floor(index / 26) - 1;
+                //         const second = index % 26;
+                //         return String.fromCharCode(97 + first) + String.fromCharCode(97 + second);
+                //     }
+                // };
+                
+                // const label = getLabel(i);
+                const binary = vertices[i].join('');
+                ctx.fillText(binary, layout[i][0], layout[i][1]-16);
+                // ctx.fillText(`${label}-${binary}`, layout[i][0], layout[i][1]-16);
+            }
+            ctx.textAlign = 'left';
+            ctx.fillText('Hasse diagram of ' + dim + '-cube', 20, 30);
+        }
+
+        // 滑軌即時更新
+        document.getElementById('maxWidth').addEventListener('input', function() {
+            const value = this.value;
+            document.getElementById('maxWidthValue').textContent = value;
+            drawCube(); // 即時更新畫面
+        });
+
+        // 高度滑軌即時更新
+        document.getElementById('maxHeight').addEventListener('input', function() {
+            const value = this.value;
+            document.getElementById('maxHeightValue').textContent = value;
+            drawCube(); // 即時更新畫面
+        });
+
+        // 維度即時更新
+        document.getElementById('dimension').addEventListener('input', function() {
+            drawCube(); // 即時更新畫面
+        });
+
+        // 線段寬度即時更新
+        document.getElementById('lineWidth').addEventListener('input', function() {
+            drawCube(); // 即時更新畫面
+        });
+
+        // 黑白模式即時更新
+        document.getElementById('bwMode').addEventListener('input', function() {
+            drawCube();
+        });
+
+        // 視覺排列即時更新
+        document.getElementById('visualSpacing').addEventListener('input', function() {
+            drawCube();
+        });
+
+        // 自動隨視窗調整
+        window.addEventListener('resize', drawCube);
+        drawCube();
+    </script>
+</body>
+
+</html>
